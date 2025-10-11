@@ -89,6 +89,8 @@ class FileHandlers(object):
 
         publisher = re.sub('!', '', self.comic['ComicPublisher']) # thanks Boom!
         publisher = helpers.filesafe(publisher)
+        if publisher not in ['Marvel', 'DC Comics', 'Image']:
+            folder_format = "Other\\$Series ($Year)"
 
         if mylar.OS_DETECT == 'Windows':
             if '/' in folder_format:
