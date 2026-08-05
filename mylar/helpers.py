@@ -3954,7 +3954,7 @@ def statusChange(status_from, status_to, comicid=None, bulk=False, api=True):
 
     return rtnline
 
-def file_ops(path,dst,arc=False,one_off=False,multiple=False):
+def file_ops(path,dst,arc=False,one_off=False,multiple=False,file_op=None):
 #    # path = source path + filename
 #    # dst = destination path + filename
 #    # arc = to denote if the file_operation is being performed as part of a story arc or not where the series exists on the watchlist already
@@ -3966,7 +3966,9 @@ def file_ops(path,dst,arc=False,one_off=False,multiple=False):
 
     softlink_type = 'absolute'
 
-    if any([one_off, arc]):
+    if file_op is not None:
+        action_op = file_op
+    elif any([one_off, arc]):
         if multiple is True:
             action_op = 'copy'
         else:

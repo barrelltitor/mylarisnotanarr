@@ -44,7 +44,7 @@ class PostProcessor(object):
     FOLDER_NAME = 2
     FILE_NAME = 3
 
-    def __init__(self, nzb_name, nzb_folder, issueid=None, module=None, queue=None, comicid=None, apicall=False, ddl=False):
+    def __init__(self, nzb_name, nzb_folder, issueid=None, module=None, queue=None, comicid=None, apicall=False, ddl=False, force_copy=False):
         """
         Creates a new post processor with the given file path and optionally an NZB name.
 
@@ -76,7 +76,10 @@ class PostProcessor(object):
         else:
             self.ddl = False
 
-        if mylar.CONFIG.FILE_OPTS == 'copy':
+        self.file_opts = 'copy' if force_copy else mylar.CONFIG.FILE_OPTS
+        self.file_op_override = 'copy' if force_copy else None
+
+        if self.file_opts == 'copy':
             self.fileop = shutil.copy
         else:
             self.fileop = shutil.move
@@ -210,17 +213,17 @@ class PostProcessor(object):
             path_to_move = dupeinfo['to_dupe']
             file_to_move = os.path.split(path_to_move)[1]
 
-            if dupeinfo['action'] == 'dupe_src' and mylar.CONFIG.FILE_OPTS == 'move':
+            if dupeinfo['action'] == 'dupe_src' and self.file_opts == 'move':
                 logger.info('[DUPLICATE-CLEANUP] New File will be post-processed. Moving duplicate [%s] to Duplicate Dump Folder for manual intervention.' % path_to_move)
             else:
-                if mylar.CONFIG.FILE_OPTS == 'move':
+                if self.file_opts == 'move':
                     logger.info('[DUPLICATE-CLEANUP][MOVE-MODE] New File will not be post-processed. Moving duplicate [%s] to Duplicate Dump Folder for manual intervention.' % path_to_move)
                 else:
                     logger.info('[DUPLICATE-CLEANUP][COPY-MODE] NEW File will not be post-processed. Retaining file in original location [%s]' % path_to_move)
                     return True
 
             #this gets tricky depending on if it's the new filename or the existing filename, and whether or not 'copy' or 'move' has been selected.
-            if mylar.CONFIG.FILE_OPTS == 'move':
+            if self.file_opts == 'move':
                 #check to make sure duplicate_dump directory exists:
                 checkdirectory = filechecker.validateAndCreateDirectory(mylar.CONFIG.DUPLICATE_DUMP, True, module='[DUPLICATE-CLEANUP]')
 
@@ -248,7 +251,7 @@ class PostProcessor(object):
         try:
             #tidyup old path
             if cacheonly is False:
-                logger.fdebug('File Option: %s [META-ENABLED: %s]' % (mylar.CONFIG.FILE_OPTS, mylar.CONFIG.ENABLE_META))
+                logger.fdebug('File Option: %s [META-ENABLED: %s]' % (self.file_opts, mylar.CONFIG.ENABLE_META))
                 logger.fdebug('odir: %s [filename: %s][self.nzb_folder: %s]' % (odir, filename, self.nzb_folder))
                 logger.fdebug('sub_path: %s [cacheonly: %s][del_nzbdir: %s]' % (sub_path, cacheonly, del_nzbdir))
                 #if sub_path exists, then we need to use that in place of self.nzb_folder since the file was in a sub-directory within self.nzb_folder
@@ -275,7 +278,7 @@ class PostProcessor(object):
                 #if all([os.path.isdir(odir), self.nzb_folder != tmp_folder]) or any([odir.startswith('mylar_'),del_nzbdir is True]):
                     # check to see if the directory is empty or not.
 
-                if all([mylar.CONFIG.FILE_OPTS == 'move', self.nzb_name == 'Manual Run', tmp_folder != self.nzb_folder]):
+                if all([self.file_opts == 'move', self.nzb_name == 'Manual Run', tmp_folder != self.nzb_folder]):
                     if not os.listdir(tmp_folder):
                         logger.fdebug('%s Tidying up. Deleting sub-folder location : %s' % (self.module, tmp_folder))
                         shutil.rmtree(tmp_folder)
@@ -305,7 +308,7 @@ class PostProcessor(object):
                             self._log('Failed to remove temporary directory: ' + tmp_folder)
                             logger.error('%s %s not empty. Skipping removal of directory - this will either be caught in further post-processing or it will have to be manually deleted.' % (self.module, tmp_folder))
 
-                elif all([mylar.CONFIG.FILE_OPTS == 'move', self.nzb_name == 'Manual Run', filename is not None]):
+                elif all([self.file_opts == 'move', self.nzb_name == 'Manual Run', filename is not None]):
                     if os.path.isfile(os.path.join(tmp_folder,filename)):
                         logger.fdebug('%s Attempting to remove original file: %s' % (self.module, os.path.join(tmp_folder, filename)))
                         try:
@@ -313,7 +316,7 @@ class PostProcessor(object):
                         except Exception as e:
                             logger.warn('%s [%s] Unable to remove file : %s' % (self.module, e, os.path.join(tmp_folder, filename)))
 
-                elif mylar.CONFIG.FILE_OPTS == 'move' and all([del_nzbdir is True, self.nzb_name != 'Manual Run']): #tmp_folder != self.nzb_folder]):
+                elif self.file_opts == 'move' and all([del_nzbdir is True, self.nzb_name != 'Manual Run']): #tmp_folder != self.nzb_folder]):
                     if not os.listdir(tmp_folder):
                         logger.fdebug('%s Tidying up. Deleting original folder location : %s' % (self.module, tmp_folder))
                         shutil.rmtree(tmp_folder)
@@ -1997,7 +2000,7 @@ class PostProcessor(object):
                                 if ml_cnt != multiple_arcs:
                                     mult_count = True
                                 logger.fdebug('ml_cnt: %s / multiple_arcs: %s --- multiple arc entry: %s' % (ml_cnt, multiple_arcs, mult_count))
-                                fileoperation = helpers.file_ops(grab_src, grab_dst, one_off=True, multiple=mult_count)
+                                fileoperation = helpers.file_ops(grab_src, grab_dst, one_off=True, multiple=mult_count, file_op=self.file_op_override)
                                 if not fileoperation:
                                     raise OSError
                             except Exception as e:
@@ -2005,7 +2008,7 @@ class PostProcessor(object):
                                 return
 
                             #tidyup old path
-                            if any([mylar.CONFIG.FILE_OPTS == 'move', mylar.CONFIG.FILE_OPTS == 'copy']):
+                            if any([self.file_opts == 'move', self.file_opts == 'copy']):
                                 if mult_count is False:
                                     self.tidyup(src_location, True, filename=os.path.basename(orig_filename))
                                 else:
@@ -2601,7 +2604,7 @@ class PostProcessor(object):
                     self._log("Destination Path : %s" % grab_dst)
 
                     logger.info('%s Destination Path : %s' % (module, grab_dst))
-                    logger.info('%s[%s] %s into directory : %s' % (module, mylar.CONFIG.FILE_OPTS, ofilename, grab_dst))
+                    logger.info('%s[%s] %s into directory : %s' % (module, self.file_opts, ofilename, grab_dst))
 
                     try:
                         checkspace = helpers.get_free_space(grdst)
@@ -2609,18 +2612,18 @@ class PostProcessor(object):
                             if all([metaresponse != 'fail', metaresponse is not None]):  # meta was done
                                 self.tidyup(src_location, True, cacheonly=True)
                             raise OSError
-                        fileoperation = helpers.file_ops(grab_src, grab_dst)
+                        fileoperation = helpers.file_ops(grab_src, grab_dst, file_op=self.file_op_override)
                         if not fileoperation:
                             raise OSError
                     except Exception as e:
-                        logger.error('%s Failed to %s %s: %s' % (module, mylar.CONFIG.FILE_OPTS, grab_src, e))
-                        self._log("Failed to %s %s: %s" % (mylar.CONFIG.FILE_OPTS, grab_src, e))
+                        logger.error('%s Failed to %s %s: %s' % (module, self.file_opts, grab_src, e))
+                        self._log("Failed to %s %s: %s" % (self.file_opts, grab_src, e))
                         self.valreturn.append({"self.log": self.log,
                                                "mode": 'stop'})
                         return self.queue.put(self.valreturn)
 
                     #tidyup old path
-                    if any([mylar.CONFIG.FILE_OPTS == 'move', mylar.CONFIG.FILE_OPTS == 'copy']):
+                    if any([self.file_opts == 'move', self.file_opts == 'copy']):
                         self.tidyup(src_location, True, filename=os.path.basename(orig_filename))
 
                     #delete entry from nzblog table
@@ -3146,26 +3149,26 @@ class PostProcessor(object):
 
                 src = os.path.join(odir, ofilename)
                 try:
-                    self._log("[%s] %s - to - %s" % (mylar.CONFIG.FILE_OPTS, src, dst))
+                    self._log("[%s] %s - to - %s" % (self.file_opts, src, dst))
                     checkspace = helpers.get_free_space(comlocation)
                     if checkspace is False:
                         if all([pcheck is not None, pcheck != 'fail']):  # meta was done
                             self.tidyup(odir, True, cacheonly=True)
                         raise OSError
-                    fileoperation = helpers.file_ops(src, dst)
+                    fileoperation = helpers.file_ops(src, dst, file_op=self.file_op_override)
                     if not fileoperation:
                         raise OSError
                 except Exception as e:
-                    self._log("Failed to %s %s - check log for exact error." % (mylar.CONFIG.FILE_OPTS, src))
+                    self._log("Failed to %s %s - check log for exact error." % (self.file_opts, src))
                     self._log("Post-Processing ABORTED.")
-                    logger.error('%s Failed to %s %s: %s' % (module, mylar.CONFIG.FILE_OPTS, src, e))
+                    logger.error('%s Failed to %s %s: %s' % (module, self.file_opts, src, e))
                     logger.error('%s Post-Processing ABORTED' % module)
                     self.valreturn.append({"self.log": self.log,
                                            "mode": 'stop'})
                     return self.queue.put(self.valreturn)
 
                 #tidyup old path
-                if any([mylar.CONFIG.FILE_OPTS == 'move', mylar.CONFIG.FILE_OPTS == 'copy']):
+                if any([self.file_opts == 'move', self.file_opts == 'copy']):
                     self.tidyup(odir, True, filename=os.path.basename(orig_filename))
 
             else:
@@ -3180,26 +3183,26 @@ class PostProcessor(object):
                         logger.fdebug('%s Filename is identical as original, not renaming.' % module)
 
                 logger.fdebug('%s odir src : %s' % (module, src))
-                logger.fdebug('%s[%s] %s ... to ... %s' % (module, mylar.CONFIG.FILE_OPTS, src, dst))
+                logger.fdebug('%s[%s] %s ... to ... %s' % (module, self.file_opts, src, dst))
                 try:
                     checkspace = helpers.get_free_space(comlocation)
                     if checkspace is False:
                         if all([pcheck != 'fail', pcheck is not None]):  # meta was done
                             self.tidyup(odir, True, cacheonly=True)
                         raise OSError
-                    fileoperation = helpers.file_ops(src, dst)
+                    fileoperation = helpers.file_ops(src, dst, file_op=self.file_op_override)
                     if not fileoperation:
                         raise OSError
                 except Exception as e:
-                    logger.error('%s Failed to %s %s: %s' % (module, mylar.CONFIG.FILE_OPTS, src, e))
+                    logger.error('%s Failed to %s %s: %s' % (module, self.file_opts, src, e))
                     logger.error('%s Post-Processing ABORTED.' %module)
                     self.failed_files +=1
                     self.valreturn.append({"self.log": self.log,
                                            "mode": 'stop'})
                     return self.queue.put(self.valreturn)
-                logger.info('%s %s successful to : %s' % (module, mylar.CONFIG.FILE_OPTS, dst))
+                logger.info('%s %s successful to : %s' % (module, self.file_opts, dst))
 
-                if any([mylar.CONFIG.FILE_OPTS == 'move', mylar.CONFIG.FILE_OPTS == 'copy']):
+                if any([self.file_opts == 'move', self.file_opts == 'copy']):
                     self.tidyup(odir, True, subpath, filename=os.path.basename(orig_filename))
 
             #Hopefully set permissions on downloaded file
@@ -3216,7 +3219,7 @@ class PostProcessor(object):
                         logger.fdebug('%s Continuing post-processing but unable to change file permissions in %s' % (module, dst))
 
             #let's reset the fileop to the original setting just in case it's a manual pp run
-            if mylar.CONFIG.FILE_OPTS == 'copy':
+            if self.file_opts == 'copy':
                 self.fileop = shutil.copy
             else:
                 self.fileop = shutil.move
@@ -3307,7 +3310,7 @@ class PostProcessor(object):
                                 checkspace = helpers.get_free_space(grdst)
                                 if checkspace is False:
                                     raise OSError
-                                fileoperation = helpers.file_ops(grab_src, grab_dst, arc=True)
+                                fileoperation = helpers.file_ops(grab_src, grab_dst, arc=True, file_op=self.file_op_override)
                                 if not fileoperation:
                                     raise OSError
                             except Exception as e:

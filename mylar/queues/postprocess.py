@@ -25,12 +25,13 @@ def postprocess_main(queue):
                     pprocess = process.Process(
                         item['nzb_name'],
                         item['nzb_folder'],
-                        item['failed'],
-                        item['issueid'],
-                        item['comicid'],
-                        item['apicall'],
-                        item['ddl'],
-                        item['download_info'],
+                        item.get('failed', False),
+                        item.get('issueid'),
+                        item.get('comicid'),
+                        item.get('apicall', False),
+                        item.get('ddl', False),
+                        item.get('download_info'),
+                        item.get('force_copy', False),
                     )
                 except Exception:
                     pprocess = process.Process(

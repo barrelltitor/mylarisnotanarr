@@ -3269,7 +3269,8 @@ def searcher(
                                     'comicid': ComicID,
                                     'failed': False,
                                     'apicall': True,
-                                    'ddl': False})
+                                    'ddl': False,
+                                    'force_copy': mylar.CONFIG.AIRDCPP_FORCE_COPY})
                 logger.info('[%s] Added %s to post-processing queue.' % (tnzbprov, filename))
                 updater.nzblog(
                     tmp_issueid,

@@ -865,6 +865,12 @@
                                            <label>Downloads Directory</label>
                                            <input type="text" name="airdcpp_download_dir" id="airdcpp_download_dir" value="${config['airdcpp_download_dir']}" size="50">
                                        </div>
+                                       <div class="row checkbox left clearfix">
+                                           <input type="checkbox" id="airdcpp_force_copy" name="airdcpp_force_copy" value="1" ${config['airdcpp_force_copy']} />
+                                           <label>Always copy AirDC++ downloads during post-processing
+                                               <small>(keeps the original in AirDC++ even when the global file operation is move)</small>
+                                           </label>
+                                       </div>
                                        <div class="row">
                                              <label>Search Hubs</label>
                                              <input type="text" name="airdcpp_hubs" id="airdcpp_hubs" value="${config['airdcpp_hubs']}" size="50">

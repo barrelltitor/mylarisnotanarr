@@ -17,6 +17,8 @@
 import requests
 import urllib.parse
 import os
+import ntpath
+import posixpath
 import sys
 import traceback
 import errno
@@ -305,30 +307,63 @@ class AirDCPP(object):
 
             yield formatted_result
 
-    def check_download_complete(self, bundle_id, filename, max_wait=1800, check_interval=5):
+    @staticmethod
+    def _bundle_filename(bundle_data):
+        """
+        Return the file name reported by AirDC++ for a file bundle.
+
+        AirDC++ may run on a different operating system (or in a different
+        container) than Mylar, so handle both path separator styles without
+        using the API's absolute target path directly.
+        """
+        filename = bundle_data.get('name')
+        if not filename:
+            target = bundle_data.get('target', '')
+            filename = ntpath.basename(posixpath.basename(target))
+
+        if not filename:
+            return None
+
+        # A file bundle name should never contain a path. Keeping only the
+        # basename also prevents an API value from escaping the configured
+        # AirDC++ download root.
+        filename = ntpath.basename(posixpath.basename(filename))
+        if filename in ('.', '..'):
+            return None
+        return filename
+
+    def check_download_complete(self, bundle_id, max_wait=1800, check_interval=5):
         """
         Check if a download is complete by monitoring the bundle status
 
         Parameters:
         bundle_id (int): The bundle ID from the download response
-        filename (str): The filename to check
         max_wait (int): Maximum time to wait in seconds
         check_interval (int): Time between checks in seconds
 
         Returns:
-        bool: True if download is complete, False otherwise
+        dict: The final filename and Mylar-visible path, or None on failure
         """
         if mylar.CONFIG.AIRDCPP_DOWNLOAD_DIR:
             dl_location = mylar.CONFIG.AIRDCPP_DOWNLOAD_DIR
         else:
-            dl_location = os.path.join(mylar.CONFIG.DDL_LOCATION, 'airdcc')
+            dl_location = os.path.join(mylar.CONFIG.DDL_LOCATION, 'airdcpp')
 
-        filepath = os.path.join(dl_location, filename)
         start_time = time.time()
+        completed_download = None
 
-        logger.info(f"[AIRDCPP] Checking download status for {filename}")
+        logger.info(f"[AIRDCPP] Checking download status for bundle {bundle_id}")
 
         while time.time() - start_time < max_wait:
+            if completed_download and os.path.exists(completed_download["path"]):
+                final_size = os.path.getsize(completed_download["path"])
+                logger.info(
+                    f"[AIRDCPP] Download complete: "
+                    f"{completed_download['filename']} "
+                    f"({final_size / (1024 * 1024):.2f} MB)"
+                )
+                return completed_download
+
             try:
                 response = self.session.get(
                     f"{self.api_url}/queue/bundles/{bundle_id}",
@@ -341,13 +376,30 @@ class AirDCPP(object):
                     status = bundle_data.get('status', {})
                     if status.get('completed', False):
                         logger.info(f"[AIRDCPP] Download reported as completed by API")
-                        if os.path.exists(filepath):
-                            final_size = os.path.getsize(filepath)
-                            logger.info(f"[AIRDCPP] Download complete: {filename} ({final_size / (1024 * 1024):.2f} MB)")
-                            return True
+                        filename = self._bundle_filename(bundle_data)
+                        if not filename:
+                            logger.warn(
+                                f"[AIRDCPP] Bundle {bundle_id} completed but the API "
+                                "did not return a final file name"
+                            )
+                            return None
+
+                        completed_download = {
+                            "filename": filename,
+                            "path": os.path.join(dl_location, filename),
+                        }
+                        if os.path.exists(completed_download["path"]):
+                            # Return through the common block at the top of
+                            # the loop so size logging stays in one place.
+                            continue
                         else:
-                            logger.warn(f"[AIRDCPP] Download completed but file not found: {filepath}")
-                            return False
+                            # The API and a mounted filesystem may become
+                            # consistent a moment apart. Keep polling and also
+                            # pick up any late bundle rename from AirDC++.
+                            logger.warn(
+                                f"[AIRDCPP] Download completed but the final file "
+                                f"is not visible yet: {completed_download['path']}"
+                            )
 
                     downloaded = bundle_data.get('downloaded_bytes', 0)
                     total = bundle_data.get('size', 0)
@@ -363,8 +415,8 @@ class AirDCPP(object):
 
             time.sleep(check_interval)
 
-        logger.warn(f"[AIRDCPP] Download timeout for {filename} after {max_wait/60:.2f} minutes")
-        return False
+        logger.warn(f"[AIRDCPP] Download timeout for bundle {bundle_id} after {max_wait/60:.2f} minutes")
+        return None
 
     def download(self, link, filename, id, issueid=None, site=None, search_instance_id=None):
         """
@@ -387,10 +439,6 @@ class AirDCPP(object):
             dl_location = mylar.CONFIG.AIRDCPP_DOWNLOAD_DIR
         else:
             dl_location = os.path.join(mylar.CONFIG.DDL_LOCATION, 'airdcpp')
-
-        dl_location = dl_location.replace('\\', '/')  # Convert Windows backslashes to forward slashes
-        if not dl_location.endswith('/'):
-            dl_location += '/'
 
         if not os.path.isdir(dl_location):
             checkdirectory = mylar.filechecker.validateAndCreateDirectory(dl_location, True)
@@ -432,32 +480,20 @@ class AirDCPP(object):
                 logger.error("[AIRDCPP] No bundle ID in download response")
                 return {"success": False, "filename": filename, "path": None}
 
-            # Check for download completion using bundle ID
-            download_complete = self.check_download_complete(bundle_id, filename)
+            # AirDC++ can rename/merge a bundle while alternate sources are
+            # discovered. Resolve the final file only from the bundle payload.
+            completed_download = self.check_download_complete(bundle_id)
 
-            if download_complete:
-                filepath = os.path.join(dl_location, filename)
-                if os.path.exists(filepath):
-                    # If the file exists, the download was successful
-                    logger.info(f"[AIRDCPP] Download completed successfully: {filepath}")
-
-                    # If issueid is provided, rename the file to include it
-                    if issueid:
-                        file, ext = os.path.splitext(filename)
-                        new_filename = f"{file}[__{issueid}__]{ext}"
-                        new_filepath = os.path.join(dl_location, new_filename)
-                        try:
-                            os.rename(filepath, new_filepath)
-                            filepath = new_filepath
-                            filename = new_filename
-                            logger.info(f"[AIRDCPP] File renamed to include issue ID: {new_filepath}")
-                        except Exception as e:
-                            logger.warn(f"[AIRDCPP] Unable to rename file: {e}")
-
-                    return {"success": True, "filename": filename, "path": filepath}
-                else:
-                    logger.error(f"[AIRDCPP] Download completed but file not found: {filepath}")
-                    return {"success": False, "filename": filename, "path": None}
+            if completed_download:
+                logger.info(
+                    f"[AIRDCPP] Download completed successfully: "
+                    f"{completed_download['path']}"
+                )
+                return {
+                    "success": True,
+                    "filename": completed_download["filename"],
+                    "path": completed_download["path"],
+                }
             else:
                 logger.error(f"[AIRDCPP] Download did not complete within the timeout period")
                 return {"success": False, "filename": filename, "path": None}
