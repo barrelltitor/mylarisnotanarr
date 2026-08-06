@@ -40,20 +40,20 @@
             <span class="action-label">Choose what to do with your selected issues:</span>
             <div class="action-button-group">
                 <div class="action-row">
-                    <button type="button" class="manage-action issue-action" data-action="Wanted" data-label="Mark as Wanted">Mark as Wanted</button>
-                    <button type="button" class="manage-action issue-action" data-action="Archived" data-label="Mark as Archived">Mark as Archived</button>
+                    <input type="button" class="manage-action issue-action" data-action="Wanted" data-label="Mark as Wanted" value="Mark as Wanted">
+                    <input type="button" class="manage-action issue-action" data-action="Archived" data-label="Mark as Archived" value="Mark as Archived">
                 </div>
                 <div class="action-row">
-                    <button type="button" class="manage-action issue-action" data-action="Skipped" data-label="Mark as Skipped">Mark as Skipped</button>
-                    <button type="button" class="manage-action issue-action" data-action="Ignored" data-label="Mark as Ignored">Mark as Ignored</button>
+                    <input type="button" class="manage-action issue-action" data-action="Skipped" data-label="Mark as Skipped" value="Mark as Skipped">
+                    <input type="button" class="manage-action issue-action" data-action="Ignored" data-label="Mark as Ignored" value="Mark as Ignored">
                 </div>
             </div>
         </div>
         <div id="issue-action-confirm" class="action-confirm hidden">
             <span id="issue-action-confirm-message"></span>
             <div class="action-confirm-buttons">
-                <button type="button" id="issue-action-confirm-yes">Yes</button>
-                <button type="button" id="issue-action-confirm-no">No</button>
+                <input type="button" id="issue-action-confirm-yes" value="Yes">
+                <input type="button" id="issue-action-confirm-no" value="No">
             </div>
         </div>
         <div class="selected-counter">Selected issues: <span id="issue-selected-count">0</span></div>
