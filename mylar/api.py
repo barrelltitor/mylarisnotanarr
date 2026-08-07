@@ -15,7 +15,7 @@
 #  along with Mylar.  If not, see <http://www.gnu.org/licenses/>.
 
 import mylar
-from mylar import db, mb, importer, search, process, versioncheck, logger, webserve, helpers, encrypted, series_metadata
+from mylar import db, mb, importer, search, process, updater, versioncheck, logger, webserve, helpers, encrypted, series_metadata
 import threading
 import json
 import cherrypy
@@ -26,6 +26,7 @@ import re
 import shutil
 import queue
 import urllib.request, urllib.error, urllib.parse
+import uuid
 from PIL import Image
 from . import cache
 from operator import itemgetter
@@ -40,7 +41,8 @@ cmd_list = ['getIndex', 'getComic', 'getUpcoming', 'getWanted', 'getHistory',
             'getComicInfo', 'getIssueInfo', 'getArt', 'downloadIssue', 'regenerateCovers',
             'refreshSeriesjson', 'seriesjsonListing', 'checkGlobalMessages',
             'listProviders', 'changeProvider', 'addProvider', 'delProvider',
-            'downloadNZB', 'getReadList', 'getStoryArc', 'addStoryArc', 'listAnnualSeries']
+            'downloadNZB', 'getReadList', 'getStoryArc', 'addStoryArc', 'listAnnualSeries',
+            'queueExternalDDL']
 
 class Api(object):
 
@@ -781,6 +783,138 @@ class Api(object):
         newValueDict = {'Status': 'Wanted'}
         myDB.upsert("issues", newValueDict, controlValueDict)
         search.searchforissue(self.id)
+
+    def _queueExternalDDL(self, **kwargs):
+        """Queue a direct-download link for Mylar-managed JD2 processing.
+
+        This is intentionally limited to one Wanted issue.  The caller supplies
+        Mylar's stable ComicID and IssueID; all display and tracking metadata is
+        read from Mylar's database rather than trusted from the external script.
+        """
+        missing = [key for key in ('comicid', 'issueid', 'link') if not kwargs.get(key)]
+        if missing:
+            self.data = self._failureResponse(
+                'Missing parameter%s: %s' % (
+                    's' if len(missing) > 1 else '',
+                    ', '.join(missing),
+                )
+            )
+            return
+
+        if not getattr(mylar.CONFIG, 'JD2_ENABLE', False) or not getattr(mylar.CONFIG, 'JD2_URL', None):
+            self.data = self._failureResponse('JDownloader2 is not enabled or configured')
+            return
+
+        link = str(kwargs['link']).strip()
+        parsed_link = urllib.parse.urlparse(link)
+        if parsed_link.scheme not in ('http', 'https') or not parsed_link.netloc:
+            self.data = self._failureResponse('link must be an absolute HTTP(S) URL')
+            return
+
+        comicid = str(kwargs['comicid'])
+        issueid = str(kwargs['issueid'])
+        myDB = db.DBConnection()
+        issue = myDB.selectone(
+            'SELECT c.ComicName, c.ComicYear, i.IssueID, i.Issue_Number, i.Status '
+            'FROM comics c INNER JOIN issues i ON c.ComicID=i.ComicID '
+            'WHERE c.ComicID=? AND i.IssueID=?',
+            [comicid, issueid],
+        ).fetchone()
+        if issue is None:
+            self.data = self._failureResponse('Issue does not belong to the supplied comic')
+            return
+        if issue['Status'] != 'Wanted':
+            self.data = self._failureResponse(
+                'Issue %s is %s, not Wanted' % (issueid, issue['Status'])
+            )
+            return
+
+        active_job = myDB.selectone(
+            "SELECT id FROM ddl_info WHERE issueid=? AND status IN ('Queued', 'Downloading')",
+            [issueid],
+        ).fetchone()
+        if active_job is not None:
+            self.data = self._failureResponse(
+                'Issue already has an active DDL job: %s' % active_job['id']
+            )
+            return
+
+        record_id = 'external-jd2-%s' % uuid.uuid4().hex
+        series = issue['ComicName']
+        year = issue['ComicYear']
+        filename = '%s (%s)' % (series, year)
+        submitted_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        provider = 'DDL(External Script)'
+        queue_payload = {
+            'link': link,
+            'mainlink': link,
+            'series': series,
+            'year': year,
+            'size': 'Unknown',
+            'comicid': comicid,
+            'issueid': issueid,
+            'oneoff': False,
+            'id': record_id,
+            'link_type': 'External-JD2',
+            'filename': filename,
+            'comicinfo': [{'pack': False}],
+            'packinfo': {'pack': False, 'pack_numbers': None, 'pack_issuelist': None},
+            'site': provider,
+            'remote_filesize': 0,
+            'resume': None,
+            'jd2_job_id': 0,
+            'jd2_priority_links': {link: 'DEFAULT'},
+        }
+
+        myDB.upsert(
+            'ddl_info',
+            {
+                'series': series,
+                'year': year,
+                'filename': filename,
+                'tmp_filename': filename,
+                'size': 'Unknown',
+                'issues': issue['Issue_Number'],
+                'issueid': issueid,
+                'comicid': comicid,
+                'link': link,
+                'mainlink': link,
+                'site': provider,
+                'pack': False,
+                'link_type': 'External-JD2',
+                'jd2_job_id': '0',
+                'updated_date': submitted_at,
+                'submit_date': submitted_at,
+                'status': 'Queued',
+            },
+            {'id': record_id},
+        )
+
+        try:
+            updater.nzblog(issueid, filename, series, id=record_id, prov=provider)
+            updater.foundsearch(comicid, issueid, mode='series', provider=provider)
+            mylar.JD2_QUEUE.put(queue_payload)
+        except Exception as err:
+            logger.error('[EXTERNAL-DDL] Unable to queue issue %s: %s', issueid, err)
+            myDB.action('DELETE FROM ddl_info WHERE id=?', [record_id])
+            self.data = self._failureResponse('Unable to queue external DDL job')
+            return
+
+        logger.info(
+            '[EXTERNAL-DDL] Queued %s #%s for JD2 as job %s',
+            series,
+            issue['Issue_Number'],
+            record_id,
+        )
+        self.data = self._successResponse(
+            {
+                'id': record_id,
+                'comicid': comicid,
+                'issueid': issueid,
+                'status': 'Queued',
+            }
+        )
+        return
 
     def _unqueueIssue(self, **kwargs):
         if 'id' not in kwargs:
@@ -1945,4 +2079,3 @@ class REST(object):
                     return json.dumps(self.issues, ensure_ascii=False)
                 else:
                     return('Nothing to do.')
-

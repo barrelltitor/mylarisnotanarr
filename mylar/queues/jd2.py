@@ -104,11 +104,33 @@ def _finish(myDB, item, status, record_id):
     return _set_status(myDB, record_id, 'Completed', item.get('jd2_job_id'))
 
 
-def _fallback(item):
+def _fail_external_job(myDB, item, record_id, reason):
+    """Record an external-link failure without passing its URL to DDL."""
+    saved = _set_status(myDB, record_id, 'Failed', item.get('jd2_job_id'))
+    issueid = item.get('issueid')
+    provider = item.get('site') or 'DDL(External Script)'
+    if issueid:
+        myDB.upsert('issues', {'Status': 'Failed'}, {'IssueID': issueid})
+        myDB.upsert(
+            'snatched',
+            {'Status': 'Failed'},
+            {'IssueID': issueid, 'Provider': provider},
+        )
+    logger.warn('[JD2-QUEUE] External DDL job %s failed: %s', record_id, reason)
+    return saved
+
+
+def _fallback(myDB, item, record_id, reason):
+    if item.get('link_type') == 'External-JD2':
+        return _fail_external_job(myDB, item, record_id, reason)
+    logger.warn(
+        '[JD2-QUEUE] Record %s is using the DDL fallback: %s', record_id, reason
+    )
     payload = dict(item)
     payload.pop('jd2_job_id', None)
     payload.pop('jd2_priority_links', None)
     mylar.DDL_QUEUE.put(payload)
+    return True
 
 
 def _poll_pending(client, myDB, pending):
@@ -130,13 +152,18 @@ def _poll_pending(client, myDB, pending):
         if state == 'completed':
             saved = _finish(myDB, item, status, record_id)
         elif state == 'failed':
-            saved = _set_status(
-                myDB,
-                record_id,
-                'Failed',
-                item.get('jd2_job_id'),
-            )
-            logger.warn('[JD2-QUEUE] Record %s failed in JD2.', record_id)
+            if item.get('link_type') == 'External-JD2':
+                saved = _fail_external_job(
+                    myDB, item, record_id, 'JD2 reported a failed download state.'
+                )
+            else:
+                saved = _set_status(
+                    myDB,
+                    record_id,
+                    'Failed',
+                    item.get('jd2_job_id'),
+                )
+                logger.warn('[JD2-QUEUE] Record %s failed in JD2.', record_id)
         else:
             continue
         if saved:
@@ -148,22 +175,19 @@ def _start_download(client, myDB, item, record_id):
     if not links and item.get('link'):
         links = {item['link']: 'DEFAULT'}
     if not links:
-        logger.warn(
-            '[JD2-QUEUE] Record %s has no JD2 links; using the DDL queue.',
-            record_id,
-        )
-        _fallback(item)
+        _fallback(myDB, item, record_id, 'No JD2 links were supplied.')
         return False
 
     package_name = _package_name(item, record_id)
     result = client.submit(links, package_name)
     job_id = result.get('jobid')
     if not job_id:
-        logger.warn(
-            '[JD2-QUEUE] Submission failed for record %s; using the DDL queue: %s',
-            record_id, result.get('error') or 'JD2 returned no job id',
+        _fallback(
+            myDB,
+            item,
+            record_id,
+            result.get('error') or 'JD2 returned no job id',
         )
-        _fallback(item)
         return False
 
     item['jd2_job_id'] = job_id
