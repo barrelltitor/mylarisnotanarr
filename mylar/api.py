@@ -785,13 +785,17 @@ class Api(object):
         search.searchforissue(self.id)
 
     def _queueExternalDDL(self, **kwargs):
-        """Queue a direct-download link for Mylar-managed JD2 processing.
+        """Queue direct-download mirror links for Mylar-managed JD2 processing.
 
         This is intentionally limited to one Wanted issue.  The caller supplies
         Mylar's stable ComicID and IssueID; all display and tracking metadata is
         read from Mylar's database rather than trusted from the external script.
         """
-        missing = [key for key in ('comicid', 'issueid', 'link') if not kwargs.get(key)]
+        missing = [
+            key for key in ('comicid', 'issueid') if not kwargs.get(key)
+        ]
+        if not kwargs.get('link') and not kwargs.get('links'):
+            missing.append('link or links')
         if missing:
             self.data = self._failureResponse(
                 'Missing parameter%s: %s' % (
@@ -805,11 +809,30 @@ class Api(object):
             self.data = self._failureResponse('JDownloader2 is not enabled or configured')
             return
 
-        link = str(kwargs['link']).strip()
-        parsed_link = urllib.parse.urlparse(link)
-        if parsed_link.scheme not in ('http', 'https') or not parsed_link.netloc:
-            self.data = self._failureResponse('link must be an absolute HTTP(S) URL')
+        supplied_links = kwargs.get('links', kwargs.get('link'))
+        if isinstance(supplied_links, str):
+            try:
+                supplied_links = json.loads(supplied_links)
+            except ValueError:
+                supplied_links = [supplied_links]
+        if not isinstance(supplied_links, (list, tuple, set)):
+            supplied_links = [supplied_links]
+
+        links = []
+        for supplied_link in supplied_links:
+            link = str(supplied_link or '').strip()
+            parsed_link = urllib.parse.urlparse(link)
+            if parsed_link.scheme not in ('http', 'https') or not parsed_link.netloc:
+                self.data = self._failureResponse(
+                    'links must contain absolute HTTP(S) URLs'
+                )
+                return
+            if link not in links:
+                links.append(link)
+        if not links:
+            self.data = self._failureResponse('No usable links were supplied')
             return
+        link = links[0]
 
         comicid = str(kwargs['comicid'])
         issueid = str(kwargs['issueid'])
@@ -863,7 +886,7 @@ class Api(object):
             'remote_filesize': 0,
             'resume': None,
             'jd2_job_id': 0,
-            'jd2_priority_links': {link: 'DEFAULT'},
+            'jd2_priority_links': {url: 'DEFAULT' for url in links},
         }
 
         myDB.upsert(
@@ -912,6 +935,7 @@ class Api(object):
                 'comicid': comicid,
                 'issueid': issueid,
                 'status': 'Queued',
+                'link_count': len(links),
             }
         )
         return
