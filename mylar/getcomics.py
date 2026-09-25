@@ -1144,6 +1144,7 @@ class GC(object):
             
                 jd2_queue_payload = dict(queue_payload)
                 jd2_queue_payload.update({
+                    'pack': x['pack'],
                     'jd2_job_id': 0,
                     'jd2_priority_links': jd2_priority_links,
                 })

@@ -211,7 +211,9 @@ class JDownloader2(object):
     @classmethod
     def _job_state(cls, links):
         states = [(cls._state(link), link) for link in links]
-        for wanted in ('completed', 'queued'):
+        # A crawler job can contain several files.  Do not post-process its
+        # folder while JD2 is still downloading or extracting another file.
+        for wanted in ('queued', 'completed'):
             for state, link in states:
                 if state == wanted:
                     return state, link
@@ -251,25 +253,20 @@ class JDownloader2(object):
                 for job_id in job_ids
             ]
 
+            # Mirror groups share one destination, so wait for every group
+            # before letting Mylar move files out of that destination.
+            queued = next((item for item in candidates if item[0] == 'queued'), None)
             completed = next(
                 (item for item in candidates if item[0] == 'completed'), None
             )
-            if completed:
-                state = 'completed'
-                chosen = completed
+            if queued:
+                state, chosen = 'queued', queued
+            elif completed:
+                state, chosen = 'completed', completed
+            elif candidates:
+                state, chosen = 'failed', candidates[0]
             else:
-                queued = next(
-                    (item for item in candidates if item[0] == 'queued'), None
-                )
-                if queued:
-                    state = 'queued'
-                    chosen = queued
-                elif candidates:
-                    state = 'failed'
-                    chosen = candidates[0]
-                else:
-                    state = 'queued'
-                    chosen = ('queued', None)
+                state, chosen = 'queued', ('queued', None)
             selected_package_ids = self.normalize_ids(
                 chosen[1].get('packageUUID') if chosen[1] else None
             )

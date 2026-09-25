@@ -77,16 +77,36 @@ def _finish(myDB, item, status, record_id):
                 record_id,
             )
             return _set_status(
-                myDB, record_id, 'Completed', item.get('jd2_job_id')
+                myDB, record_id, 'Failed', item.get('jd2_job_id')
+            )
+        has_comics = any(
+            name.lower().endswith(('.cbr', '.cbz', '.pdf', '.cb7'))
+            for _, _, names in os.walk(folder)
+            for name in names
+        )
+        if not has_comics:
+            logger.warn(
+                '[JD2-QUEUE] JD2 finished record %s, but no comic files were '
+                'found under %s. Check the JD2 download path and extraction.',
+                record_id, folder,
+            )
+            return _set_status(
+                myDB, record_id, 'Failed', item.get('jd2_job_id')
             )
         data = status.get('data') or {}
+        # A pack was snatched for multiple issues.  Scan its entire download
+        # folder instead of restricting post-processing to the first issue.
+        is_pack = item.get('comicid') and item.get('pack') in (True, 1, '1', 'True')
         try:
             mylar.PP_QUEUE.put(
                 {
-                    'nzb_name': data.get('name') or _package_name(item, record_id),
+                    'nzb_name': (
+                        _package_name(item, record_id) if is_pack else
+                        data.get('name') or _package_name(item, record_id)
+                    ),
                     'nzb_folder': folder,
                     'failed': False,
-                    'issueid': item.get('issueid'),
+                    'issueid': None if is_pack else item.get('issueid'),
                     'comicid': item.get('comicid'),
                     'apicall': True,
                     'ddl': True,
